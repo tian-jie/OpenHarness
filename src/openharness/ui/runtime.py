@@ -188,6 +188,32 @@ def _resolve_api_client_from_settings(settings) -> SupportsStreamingMessages:
             claude_oauth=True,
             auth_token_resolver=lambda: settings.resolve_auth().value,
         )
+    if settings.api_format == "azure_openai" or settings.provider == "azure_openai":
+        from openharness.api.azure_openai_client import AzureOpenAIClient
+        from openharness.auth.azure_entra import (
+            AzureEntraConfig,
+            AzureIdentityNotInstalled,
+            build_token_provider,
+        )
+
+        auth = _safe_resolve_auth()
+        _, profile = settings.resolve_profile()
+        try:
+            token_provider = build_token_provider(
+                AzureEntraConfig(
+                    tenant_id=profile.tenant_id,
+                )
+            )
+        except AzureIdentityNotInstalled as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+        del auth  # value is a sentinel — actual token comes from the provider
+        return AzureOpenAIClient(
+            azure_endpoint=settings.base_url or "",
+            api_version=profile.api_version,
+            token_provider=token_provider,
+            timeout=settings.timeout,
+        )
     if settings.api_format in ("openai", "openai_compat"):
         auth = _safe_resolve_auth()
         return OpenAICompatibleClient(

@@ -38,6 +38,7 @@ _KNOWN_PROVIDERS = [
     "gemini",
     "minimax",
     "modelscope",
+    "azure_openai",
 ]
 
 _AUTH_SOURCES = [
@@ -53,6 +54,7 @@ _AUTH_SOURCES = [
     "gemini_api_key",
     "minimax_api_key",
     "modelscope_api_key",
+    "azure_entra_id",
 ]
 
 _PROFILE_BY_PROVIDER = {
@@ -65,6 +67,7 @@ _PROFILE_BY_PROVIDER = {
     "gemini": "gemini",
     "minimax": "minimax",
     "modelscope": "modelscope",
+    "azure_openai": "azure-openai",
 }
 
 
@@ -169,6 +172,21 @@ class AuthManager:
                     configured = True
                     origin = "file"
                     state = "configured"
+            elif source == "azure_entra_id":
+                # Entra ID has no stored secret — credentials live in az-cli /
+                # env vars / managed identity.  We optimistically report
+                # "configured" when the optional dep is installed; the runtime
+                # surfaces the real error if token acquisition fails.
+                try:
+                    import azure.identity  # noqa: F401, PLC0415
+
+                    configured = True
+                    origin = "azure-identity"
+                    state = "configured"
+                except ImportError:
+                    state = "missing"
+                    detail = "Install with `pip install azure-identity`"
+
             elif load_credential(storage_provider, "api_key"):
                 configured = True
                 origin = "file"
@@ -273,6 +291,15 @@ class AuthManager:
                     configured = True
                     source = "file"
 
+            elif provider == "azure_openai":
+                try:
+                    import azure.identity  # noqa: F401, PLC0415
+
+                    configured = True
+                    source = "azure-identity"
+                except ImportError:
+                    pass
+
             elif provider in ("bedrock", "vertex"):
                 # These typically use environment-level credentials (AWS/GCP).
                 cred = load_credential(provider, "api_key")
@@ -356,6 +383,8 @@ class AuthManager:
         allowed_models: list[str] | None = None,
         context_window_tokens: int | None = None,
         auto_compact_threshold_tokens: int | None = None,
+        api_version: str | None = None,
+        tenant_id: str | None = None,
     ) -> None:
         """Update a profile in-place."""
         profiles = self.settings.merged_profiles()
@@ -384,6 +413,8 @@ class AuthManager:
                 if auto_compact_threshold_tokens is not None
                 else current.auto_compact_threshold_tokens
             ),
+            "api_version": api_version if api_version is not None else current.api_version,
+            "tenant_id": tenant_id if tenant_id is not None else current.tenant_id,
         }
         profiles[name] = current.model_copy(update=updates)
         updated = self.settings.model_copy(update={"profiles": profiles})

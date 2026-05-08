@@ -16,6 +16,7 @@ _AUTH_KIND: dict[str, str] = {
     "copilot": "oauth_device",
     "openai_codex": "external_oauth",
     "anthropic_claude": "external_oauth",
+    "azure_openai": "azure_entra",
 }
 
 _VOICE_REASON: dict[str, str] = {
@@ -26,6 +27,7 @@ _VOICE_REASON: dict[str, str] = {
     "copilot": "voice mode is not supported for GitHub Copilot",
     "openai_codex": "voice mode is not supported for Codex subscription auth",
     "anthropic_claude": "voice mode is not supported for Claude subscription auth",
+    "azure_openai": "voice mode is not wired for Azure OpenAI in this build",
 }
 
 
@@ -61,6 +63,13 @@ def detect_provider(settings: Settings) -> ProviderInfo:
             auth_kind="oauth_device",
             voice_supported=False,
             voice_reason=_VOICE_REASON["copilot"],
+        )
+    if settings.provider == "azure_openai" or settings.api_format == "azure_openai":
+        return ProviderInfo(
+            name="azure_openai",
+            auth_kind="azure_entra",
+            voice_supported=False,
+            voice_reason=_VOICE_REASON["azure_openai"],
         )
 
     spec = detect_provider_from_registry(
@@ -105,6 +114,14 @@ def auth_status(settings: Settings) -> str:
         if auth_info.enterprise_url:
             return f"configured (enterprise: {auth_info.enterprise_url})"
         return "configured"
+    if settings.provider == "azure_openai" or settings.api_format == "azure_openai":
+        try:
+            import azure.identity  # noqa: F401, PLC0415
+        except ImportError:
+            return "missing (install azure-identity: pip install azure-identity)"
+        if not (settings.base_url or "").strip():
+            return "missing (run 'oh auth azure-login' to set endpoint)"
+        return "configured (Entra ID)"
     try:
         resolved = settings.resolve_auth()
     except ValueError as exc:

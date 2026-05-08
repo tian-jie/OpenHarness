@@ -120,6 +120,12 @@ class ProviderProfile(BaseModel):
     allowed_models: list[str] = Field(default_factory=list)
     context_window_tokens: int | None = None
     auto_compact_threshold_tokens: int | None = None
+    # Azure OpenAI requires an explicit `api-version` query parameter on every
+    # request.  We expose it as a generic optional field so other future
+    # provider families can reuse it (the OpenAI beta channel uses the same
+    # concept).  ``tenant_id`` is similarly Azure-specific but kept generic.
+    api_version: str | None = None
+    tenant_id: str | None = None
 
     @property
     def resolved_model(self) -> str:
@@ -264,6 +270,17 @@ def default_provider_profiles() -> dict[str, ProviderProfile]:
             default_model="deepseek-ai/DeepSeek-V4-Flash",
             base_url="https://api-inference.modelscope.cn/v1",
         ),
+        "azure-openai": ProviderProfile(
+            label="Azure OpenAI (Entra ID)",
+            provider="azure_openai",
+            api_format="azure_openai",
+            auth_source="azure_entra_id",
+            default_model="gpt-4o",
+            # Users override base_url with their resource endpoint, e.g.
+            # https://my-aoai.openai.azure.com/
+            base_url=None,
+            api_version="2024-10-21",
+        ),
     }
 
 
@@ -354,6 +371,7 @@ def auth_source_provider_name(auth_source: str) -> str:
         "minimax_api_key": "minimax",
         "nvidia_api_key": "nvidia",
         "modelscope_api_key": "modelscope",
+        "azure_entra_id": "azure_openai",
     }
     return mapping.get(auth_source, auth_source)
 
@@ -361,6 +379,16 @@ def auth_source_provider_name(auth_source: str) -> str:
 def auth_source_uses_api_key(auth_source: str) -> bool:
     """Return True when the auth source is backed by a user-supplied API key."""
     return auth_source.endswith("_api_key")
+
+
+def auth_source_uses_external_oauth(auth_source: str) -> bool:
+    """Return True for OAuth-style auth sources that have no API key to store."""
+    return auth_source in {
+        "claude_subscription",
+        "codex_subscription",
+        "copilot_oauth",
+        "azure_entra_id",
+    }
 
 
 def credential_storage_provider_name(profile_name: str, profile: ProviderProfile) -> str:
@@ -383,6 +411,8 @@ def default_auth_source_for_provider(provider: str, api_format: str | None = Non
         return "codex_subscription"
     if provider == "copilot":
         return "copilot_oauth"
+    if provider == "azure_openai" or api_format == "azure_openai":
+        return "azure_entra_id"
     if provider == "dashscope":
         return "dashscope_api_key"
     if provider == "bedrock":
@@ -721,6 +751,25 @@ class Settings(BaseModel):
                 auth_kind="oauth_device",
                 value="copilot-managed",
                 source="copilot",
+                state="configured",
+            )
+
+        if auth_source == "azure_entra_id":
+            # The actual Bearer token is acquired lazily by the runtime
+            # (via the openai SDK's ``azure_ad_token_provider`` callback)
+            # using ``azure-identity``'s DefaultAzureCredential chain.
+            # We only validate that a base_url is configured here.
+            if not (profile.base_url or "").strip():
+                raise ValueError(
+                    "Azure OpenAI requires an endpoint. Set 'base_url' on the "
+                    "profile (e.g. https://my-aoai.openai.azure.com/) or run "
+                    "`oh auth azure-login` to configure it interactively."
+                )
+            return ResolvedAuth(
+                provider="azure_openai",
+                auth_kind="azure_entra",
+                value="azure-entra-managed",
+                source=f"entra:{profile.tenant_id or 'default'}",
                 state="configured",
             )
 

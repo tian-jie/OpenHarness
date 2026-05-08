@@ -308,6 +308,20 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         is_oauth=False,
     ),
     # === Cloud platform providers (detected by base_url) ====================
+    # Azure OpenAI Service (Entra ID auth, OpenAI-style API with deployments)
+    ProviderSpec(
+        name="azure_openai",
+        keywords=("azure",),
+        env_key="",
+        display_name="Azure OpenAI",
+        backend_type="openai_compat",
+        default_base_url="",
+        detect_by_key_prefix="",
+        detect_by_base_keyword="openai.azure.com",
+        is_gateway=False,
+        is_local=False,
+        is_oauth=True,
+    ),
     # AWS Bedrock
     ProviderSpec(
         name="bedrock",

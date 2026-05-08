@@ -1232,6 +1232,7 @@ _PROVIDER_LABELS: dict[str, str] = {
     "gemini": "Google Gemini",
     "minimax": "MiniMax",
     "modelscope": "ModelScope",
+    "azure_openai": "Azure OpenAI (Entra ID)",
 }
 
 _AUTH_SOURCE_LABELS: dict[str, str] = {
@@ -1247,6 +1248,7 @@ _AUTH_SOURCE_LABELS: dict[str, str] = {
     "gemini_api_key": "Gemini API key",
     "minimax_api_key": "MiniMax API key",
     "modelscope_api_key": "ModelScope API key",
+    "azure_entra_id": "Azure Entra ID (AAD)",
 }
 
 
@@ -1712,6 +1714,10 @@ def _login_provider(provider: str) -> None:
     if provider in ("openai_codex", "anthropic_claude"):
         _bind_external_provider(provider)
         return
+    
+    if provider == "azure_openai":
+        _run_azure_entra_login()
+        return
 
     if provider in ("anthropic", "openai", "dashscope", "bedrock", "vertex", "moonshot", "gemini", "minimax", "modelscope"):
         label = _PROVIDER_LABELS.get(provider, provider)
@@ -1798,7 +1804,7 @@ def auth_login(
     """Interactively authenticate with a provider.
 
     Run without arguments to choose a provider from a menu.
-    Supported providers: anthropic, anthropic_claude, openai, openai_codex, copilot, dashscope, bedrock, vertex, moonshot, minimax, modelscope.
+    Supported providers: anthropic, anthropic_claude, openai, openai_codex, copilot, dashscope, bedrock, vertex, moonshot, minimax, modelscope, azure_openai.
     """
     if provider is None:
         print("Select a provider to authenticate:", flush=True)
@@ -1951,6 +1957,137 @@ def auth_copilot_logout() -> None:
 
     clear_github_token()
     print("Copilot authentication cleared.")
+
+
+def _run_azure_entra_login() -> None:
+    """Configure the Azure OpenAI profile + verify Entra ID token acquisition.
+
+    Entra ID itself has no "login" we can perform from inside Python — the
+    actual identity is provided by ``az login`` / managed identity / env
+    vars / etc.  This helper instead:
+
+      1. Captures the Azure OpenAI endpoint, deployment, api-version and
+         optional tenant ID into the ``azure-openai`` provider profile.
+      2. Probes ``DefaultAzureCredential`` with the user's choices to give
+         immediate "looks good / fix this" feedback.
+    """
+    from openharness.auth.azure_entra import AzureEntraConfig, probe_credential
+    from openharness.auth.manager import AuthManager
+    from openharness.config.settings import ProviderProfile
+
+    print("Configure Azure OpenAI with Microsoft Entra ID authentication.", flush=True)
+    print(
+        "Tip: identity is sourced via DefaultAzureCredential — make sure "
+        "`az login` succeeded, or set AZURE_CLIENT_ID / AZURE_TENANT_ID / "
+        "AZURE_CLIENT_SECRET, or run inside a managed-identity environment.",
+        flush=True,
+    )
+    print(flush=True)
+
+    manager = AuthManager()
+    profiles = manager.list_profiles()
+    existing = profiles.get("azure-openai")
+
+    endpoint = _text_prompt(
+        "Azure OpenAI resource endpoint (e.g. https://my-aoai.openai.azure.com/)",
+        default=(existing.base_url if existing else "") or "",
+    ).strip().rstrip("/")
+    if not endpoint:
+        print("Error: endpoint cannot be empty.", file=sys.stderr, flush=True)
+        raise typer.Exit(1)
+    if not endpoint.startswith(("http://", "https://")):
+        endpoint = f"https://{endpoint}"
+
+    deployment = _text_prompt(
+        "Default deployment name (the name you chose in Azure portal, not the model id)",
+        default=(existing.default_model if existing else "gpt-4o"),
+    ).strip()
+    if not deployment:
+        print("Error: deployment cannot be empty.", file=sys.stderr, flush=True)
+        raise typer.Exit(1)
+
+    api_version = _text_prompt(
+        "Azure OpenAI api-version",
+        default=(existing.api_version if existing and existing.api_version else "2024-10-21"),
+    ).strip()
+
+    tenant_id = _text_prompt(
+        "Tenant ID (leave blank to auto-detect from `az login` / env)",
+        default=(existing.tenant_id if existing and existing.tenant_id else ""),
+    ).strip() or None
+
+    print(flush=True)
+    print("Validating Entra ID credentials …", flush=True)
+    ok, error = probe_credential(AzureEntraConfig(tenant_id=tenant_id))
+    if not ok:
+        print(f"Error: {error}", file=sys.stderr, flush=True)
+        if isinstance(error, str) and "not installed" not in error.lower():
+            print(
+                "  Hint: try `az login` or `az login --tenant <YOUR_TENANT>` "
+                "before re-running this command.",
+                file=sys.stderr,
+                flush=True,
+            )
+        raise typer.Exit(1)
+    print("  ok — token acquired.", flush=True)
+
+    new_profile = ProviderProfile(
+        label=existing.label if existing else "Azure OpenAI (Entra ID)",
+        provider="azure_openai",
+        api_format="azure_openai",
+        auth_source="azure_entra_id",
+        default_model=deployment,
+        last_model=deployment,
+        base_url=endpoint,
+        api_version=api_version,
+        tenant_id=tenant_id,
+        allowed_models=existing.allowed_models if existing else [],
+        context_window_tokens=existing.context_window_tokens if existing else None,
+        auto_compact_threshold_tokens=existing.auto_compact_threshold_tokens if existing else None,
+    )
+    manager.upsert_profile("azure-openai", new_profile)
+    print(flush=True)
+    print("Azure OpenAI profile saved as 'azure-openai'.", flush=True)
+    print("Activate it with:  oh provider use azure-openai", flush=True)
+
+
+@auth_app.command("azure-login")
+def auth_azure_login() -> None:
+    """Configure the Azure OpenAI profile and verify Entra ID auth."""
+    _run_azure_entra_login()
+
+
+@auth_app.command("azure-logout")
+def auth_azure_logout() -> None:
+    """Reset the saved Azure OpenAI profile to defaults.
+
+    Note: this does *not* invalidate any Azure tokens — Entra ID identity is
+    managed by ``az login`` / managed identity / env vars.  Use
+    ``az logout`` to drop the underlying credential cache.
+    """
+    from openharness.auth.manager import AuthManager
+
+    manager = AuthManager()
+    if manager.get_active_profile() == "azure-openai":
+        try:
+            manager.use_profile("claude-api")
+        except ValueError:
+            pass
+    # 'azure-openai' is a built-in profile, so we cannot delete it — clear
+    # its endpoint/tenant fields so the next `oh auth status` reflects the
+    # logged-out state.
+    manager.update_profile(
+        "azure-openai",
+        base_url="",
+        last_model="",
+        tenant_id="",
+    )
+    print(
+        "Azure OpenAI profile reset. "
+        "Run `az logout` if you also want to drop the cached Entra ID token.",
+        flush=True,
+    )
+
 
 
 # ---- provider subcommands ----

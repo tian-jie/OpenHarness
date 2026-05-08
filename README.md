@@ -411,6 +411,44 @@ oh provider list
     auth=openai_api_key model=glm-4.7-flash:q8_0 base_url=http://localhost:11434/v1
 ```
 
+### Azure OpenAI with Microsoft Entra ID (`--api-format azure_openai`)
+
+Authenticate to **Azure OpenAI Service** using **Microsoft Entra ID** (formerly Azure AD) — no API keys needed. OpenHarness uses [`DefaultAzureCredential`](https://learn.microsoft.com/azure/developer/python/sdk/authentication/credential-chains#defaultazurecredential-overview) so identity is sourced automatically from any of:
+
+- `az login` cached credentials
+- Environment variables (`AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_CLIENT_SECRET`)
+- Workload Identity (federated tokens, e.g. AKS / GitHub Actions OIDC)
+- Managed Identity (system- or user-assigned, on Azure compute)
+- Azure Developer CLI / VS Code Azure account
+
+```bash
+# Install the optional Azure dependency
+pip install openharness-ai[azure]
+# or:  pip install azure-identity
+
+# One-time setup: enter endpoint + deployment, validates the Entra ID token
+oh auth azure-login
+
+# Activate the profile
+oh provider use azure-openai
+
+# (Optional) Specify a different deployment name on the fly
+oh --model gpt-4o-mini
+
+# Reset the saved Azure profile (does NOT run `az logout`)
+oh auth azure-logout
+```
+
+| Feature | Details |
+|---------|---------|
+| **Auth method** | Microsoft Entra ID via `DefaultAzureCredential` (no API key) |
+| **Endpoint** | `https://<your-resource>.openai.azure.com/` |
+| **Models** | Uses Azure deployment names (set per-resource in Azure portal) |
+| **Token refresh** | Cached & auto-refreshed in process by `azure-identity` |
+| **API** | OpenAI-compatible chat completions, tool/function calling, streaming |
+| **API version** | Defaults to `2024-10-21`; override via `oh auth azure-login` |
+
+
 ### GitHub Copilot Format (`--api-format copilot`)
 
 Use your existing GitHub Copilot subscription as the LLM backend. Authentication uses GitHub's OAuth device flow — no API keys needed.
