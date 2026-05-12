@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable, Protocol
 
+import httpx
 from anthropic import APIError, APIStatusError, AsyncAnthropic
 
 from openharness.api.errors import (
@@ -34,6 +36,11 @@ BASE_DELAY = 1.0  # seconds
 MAX_DELAY = 30.0
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 529}
 OAUTH_BETA_HEADER = "oauth-2025-04-20"
+
+
+def _env_flag_enabled(name: str) -> bool:
+    value = os.environ.get(name, "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True)
@@ -125,12 +132,14 @@ class AnthropicApiClient:
         base_url: str | None = None,
         claude_oauth: bool = False,
         auth_token_resolver: Callable[[], str] | None = None,
+        include_auth_token_beta_header: bool = True,
     ) -> None:
         self._api_key = api_key
         self._auth_token = auth_token
         self._base_url = base_url
         self._claude_oauth = claude_oauth
         self._auth_token_resolver = auth_token_resolver
+        self._include_auth_token_beta_header = include_auth_token_beta_header
         self._session_id = get_claude_code_session_id() if claude_oauth else ""
         self._client = self._create_client()
 
@@ -140,17 +149,20 @@ class AnthropicApiClient:
             kwargs["api_key"] = self._api_key
         if self._auth_token:
             kwargs["auth_token"] = self._auth_token
-            kwargs["default_headers"] = (
-                claude_oauth_headers()
-                if self._claude_oauth
-                else {"anthropic-beta": OAUTH_BETA_HEADER}
-            )
+            if self._claude_oauth:
+                kwargs["default_headers"] = claude_oauth_headers()
+            elif self._include_auth_token_beta_header:
+                kwargs["default_headers"] = {"anthropic-beta": OAUTH_BETA_HEADER}
         if self._base_url:
             kwargs["base_url"] = self._base_url
+        if _env_flag_enabled("OPENHARNESS_INSECURE_SKIP_TLS_VERIFY"):
+            # Explicitly opt-in escape hatch for environments behind TLS
+            # interception proxies with unmanaged trust chains.
+            kwargs["http_client"] = httpx.AsyncClient(verify=False)
         return AsyncAnthropic(**kwargs)
 
     def _refresh_client_auth(self) -> None:
-        if not self._claude_oauth or self._auth_token_resolver is None:
+        if self._auth_token_resolver is None:
             return
         next_token = self._auth_token_resolver()
         if next_token and next_token != self._auth_token:
@@ -259,8 +271,23 @@ class AnthropicApiClient:
 
 def _translate_api_error(exc: APIError) -> OpenHarnessApiError:
     name = exc.__class__.__name__
+    details = str(exc)
+    cause = getattr(exc, "__cause__", None)
+    while cause is not None:
+        cause_msg = str(cause)
+        if cause_msg:
+            details = f"{details}: {cause_msg}"
+        cause = getattr(cause, "__cause__", None)
+
+    lowered = details.lower()
+    if "certificate verify failed" in lowered or "sslcertverificationerror" in lowered:
+        return RequestFailure(
+            "TLS certificate verification failed. "
+            "Your network may require trusting a corporate root CA for Python "
+            "(for example via SSL_CERT_FILE or REQUESTS_CA_BUNDLE)."
+        )
     if name in {"AuthenticationError", "PermissionDeniedError"}:
-        return AuthenticationFailure(str(exc))
+        return AuthenticationFailure(details)
     if name == "RateLimitError":
-        return RateLimitFailure(str(exc))
-    return RequestFailure(str(exc))
+        return RateLimitFailure(details)
+    return RequestFailure(details)

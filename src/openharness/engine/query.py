@@ -773,7 +773,17 @@ async def run_query(
                     messages[:] = compacted_messages
                 if was_compacted:
                     continue
-            if "connect" in error_msg.lower() or "timeout" in error_msg.lower() or "network" in error_msg.lower():
+            lowered_error = error_msg.lower()
+            if "certificate verify failed" in lowered_error or "sslcertverificationerror" in lowered_error:
+                yield ErrorEvent(
+                    message=(
+                        "TLS certificate verification failed. "
+                        "Your network may be using a corporate proxy with a custom root CA. "
+                        "Install/trust the corporate CA for Python (or set SSL_CERT_FILE / REQUESTS_CA_BUNDLE), "
+                        "then retry."
+                    )
+                ), None
+            elif "connect" in lowered_error or "timeout" in lowered_error or "network" in lowered_error:
                 yield ErrorEvent(message=f"Network error: {error_msg}. Check your internet connection and try again."), None
             else:
                 yield ErrorEvent(message=f"API error: {error_msg}"), None

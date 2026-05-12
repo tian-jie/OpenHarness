@@ -214,6 +214,42 @@ def _resolve_api_client_from_settings(settings) -> SupportsStreamingMessages:
             token_provider=token_provider,
             timeout=settings.timeout,
         )
+    if settings.provider == "azure_anthropic":
+        from openharness.auth.azure_entra import (
+            AzureEntraConfig,
+            AzureIdentityNotInstalled,
+            build_token_provider,
+        )
+
+        auth = _safe_resolve_auth()
+        _, profile = settings.resolve_profile()
+        try:
+            token_provider = build_token_provider(
+                AzureEntraConfig(
+                    tenant_id=profile.tenant_id,
+                )
+            )
+            # Anthropic SDK expects the current token string at construction
+            # time. Re-resolve before each request via auth_token_resolver.
+            token = token_provider()
+        except AzureIdentityNotInstalled as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+        base_url = (settings.base_url or "").rstrip("/")
+        lowered_base = base_url.lower()
+        # Anthropic SDK already calls /v1/messages; tolerate users pasting
+        # full REST endpoint URLs by trimming the duplicated suffix.
+        if lowered_base.endswith("/v1/messages"):
+            base_url = base_url[: -len("/v1/messages")]
+        elif lowered_base.endswith("/messages"):
+            base_url = base_url[: -len("/messages")]
+        del auth  # value is a sentinel — actual token comes from the provider
+        return AnthropicApiClient(
+            auth_token=token,
+            base_url=base_url,
+            auth_token_resolver=token_provider,
+            include_auth_token_beta_header=False,
+        )
     if settings.api_format in ("openai", "openai_compat"):
         auth = _safe_resolve_auth()
         return OpenAICompatibleClient(

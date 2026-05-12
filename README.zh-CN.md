@@ -235,6 +235,38 @@ oh provider list
 oh provider use <profile>
 ```
 
+### Azure OpenAI / Azure Anthropic（Microsoft Entra ID）
+
+OpenHarness 支持使用 Microsoft Entra ID（原 Azure AD）进行 Azure 鉴权，无需 API Key。
+
+先安装可选依赖：
+
+```bash
+pip install openharness-ai[azure]
+# 或
+pip install azure-identity
+```
+
+配置 Azure OpenAI：
+
+```bash
+oh auth azure-login --provider azure_openai
+oh provider use azure-openai
+```
+
+配置 Azure Anthropic（例如 claude-opus-4-7）：
+
+```bash
+oh auth azure-login --provider azure_anthropic
+oh provider use azure-anthropic
+```
+
+`azure-anthropic` 的 endpoint 建议填：
+
+- `https://<your-resource>.services.ai.azure.com/anthropic`
+- 不要手动追加 `/v1/messages`
+- 即使误填了 `/v1/messages`，OpenHarness 也会自动裁剪
+
 ---
 
 ## `ohmo` Personal Agent
@@ -374,6 +406,58 @@ ohmo gateway restart
 ---
 
 ## 测试
+
+## 故障排查
+
+### TLS 证书校验失败（公司代理 / SSL 检查）
+
+如果你看到类似错误：
+
+- `TLS certificate verification failed`
+- `self-signed certificate in certificate chain`
+
+通常是公司网络代理对 HTTPS 做了中间人检查，Python 不信任企业根证书导致。
+
+推荐方案（更安全）：把企业根证书导入 Python/OpenSSL 信任链。
+
+临时方案（不安全）：设置环境变量 `OPENHARNESS_INSECURE_SKIP_TLS_VERIFY=1` 跳过 TLS 校验。
+
+仅当前终端会话生效：
+
+```powershell
+$env:OPENHARNESS_INSECURE_SKIP_TLS_VERIFY='1'
+openh
+```
+
+```bash
+export OPENHARNESS_INSECURE_SKIP_TLS_VERIFY=1
+oh
+```
+
+当前用户持久生效：
+
+```powershell
+setx OPENHARNESS_INSECURE_SKIP_TLS_VERIFY 1
+```
+
+```bash
+echo 'export OPENHARNESS_INSECURE_SKIP_TLS_VERIFY=1' >> ~/.bashrc
+source ~/.bashrc
+```
+
+仅 VS Code 集成终端生效：
+
+```json
+{
+  "terminal.integrated.env.windows": {
+    "OPENHARNESS_INSECURE_SKIP_TLS_VERIFY": "1"
+  }
+}
+```
+
+安全提示：跳过 TLS 校验会降低 HTTPS 安全性，仅建议在受控内网环境临时使用。
+
+---
 
 ```bash
 uv run pytest -q

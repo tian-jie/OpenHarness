@@ -281,6 +281,14 @@ def default_provider_profiles() -> dict[str, ProviderProfile]:
             base_url=None,
             api_version="2024-10-21",
         ),
+        "azure-anthropic": ProviderProfile(
+            label="Azure AI Anthropic (Entra ID)",
+            provider="azure_anthropic",
+            api_format="anthropic",
+            auth_source="azure_entra_id",
+            default_model="claude-opus-4-7",
+            base_url=None,
+        ),
     }
 
 
@@ -303,7 +311,7 @@ def display_label_for_profile(profile_name: str, profile: ProviderProfile) -> st
 
 def is_claude_family_provider(provider: str) -> bool:
     """Return True when the provider is a Claude/Anthropic workflow."""
-    return provider in {"anthropic", "anthropic_claude"}
+    return provider in {"anthropic", "anthropic_claude", "azure_anthropic"}
 
 
 def display_model_setting(profile: ProviderProfile) -> str:
@@ -412,6 +420,8 @@ def default_auth_source_for_provider(provider: str, api_format: str | None = Non
     if provider == "copilot":
         return "copilot_oauth"
     if provider == "azure_openai" or api_format == "azure_openai":
+        return "azure_entra_id"
+    if provider == "azure_anthropic":
         return "azure_entra_id"
     if provider == "dashscope":
         return "dashscope_api_key"
@@ -761,12 +771,12 @@ class Settings(BaseModel):
             # We only validate that a base_url is configured here.
             if not (profile.base_url or "").strip():
                 raise ValueError(
-                    "Azure OpenAI requires an endpoint. Set 'base_url' on the "
+                    "Azure Entra ID provider requires an endpoint. Set 'base_url' on the "
                     "profile (e.g. https://my-aoai.openai.azure.com/) or run "
                     "`oh auth azure-login` to configure it interactively."
                 )
             return ResolvedAuth(
-                provider="azure_openai",
+                provider=provider or "azure_openai",
                 auth_kind="azure_entra",
                 value="azure-entra-managed",
                 source=f"entra:{profile.tenant_id or 'default'}",

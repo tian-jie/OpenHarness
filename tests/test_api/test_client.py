@@ -70,6 +70,68 @@ def test_anthropic_client_adds_claude_oauth_identity_headers(monkeypatch):
     assert "claude-code-20250219" in headers["anthropic-beta"]
 
 
+def test_anthropic_client_can_disable_auth_token_beta_header(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _FakeAsyncAnthropic:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("openharness.api.client.AsyncAnthropic", _FakeAsyncAnthropic)
+
+    AnthropicApiClient(
+        auth_token="bearer-token",
+        include_auth_token_beta_header=False,
+    )
+
+    assert captured["auth_token"] == "bearer-token"
+    assert "default_headers" not in captured
+
+
+def test_anthropic_client_refreshes_auth_with_resolver(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    class _FakeAsyncAnthropic:
+        def __init__(self, **kwargs):
+            calls.append(dict(kwargs))
+
+    monkeypatch.setattr("openharness.api.client.AsyncAnthropic", _FakeAsyncAnthropic)
+
+    current_token = {"value": "token-1"}
+
+    client = AnthropicApiClient(
+        auth_token="token-1",
+        auth_token_resolver=lambda: current_token["value"],
+    )
+    assert calls[-1]["auth_token"] == "token-1"
+
+    current_token["value"] = "token-2"
+    client._refresh_client_auth()
+    assert calls[-1]["auth_token"] == "token-2"
+
+
+def test_anthropic_client_can_skip_tls_verification_with_env_flag(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _FakeAsyncAnthropic:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    class _FakeHttpClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    monkeypatch.setenv("OPENHARNESS_INSECURE_SKIP_TLS_VERIFY", "1")
+    monkeypatch.setattr("openharness.api.client.AsyncAnthropic", _FakeAsyncAnthropic)
+    monkeypatch.setattr("openharness.api.client.httpx.AsyncClient", _FakeHttpClient)
+
+    AnthropicApiClient(auth_token="oauth-token")
+
+    http_client = captured["http_client"]
+    assert isinstance(http_client, _FakeHttpClient)
+    assert http_client.kwargs["verify"] is False
+
+
 def test_conversation_message_serializes_image_block_for_anthropic():
     message = ConversationMessage(
         role="user",

@@ -1233,6 +1233,7 @@ _PROVIDER_LABELS: dict[str, str] = {
     "minimax": "MiniMax",
     "modelscope": "ModelScope",
     "azure_openai": "Azure OpenAI (Entra ID)",
+    "azure_anthropic": "Azure AI Anthropic (Entra ID)",
 }
 
 _AUTH_SOURCE_LABELS: dict[str, str] = {
@@ -1611,7 +1612,10 @@ def _ensure_profile_auth(manager, profile_name: str) -> None:
 
     profile = manager.list_profiles()[profile_name]
     if not auth_source_uses_api_key(profile.auth_source):
-        _login_provider(auth_source_provider_name(profile.auth_source))
+        provider_to_login = auth_source_provider_name(profile.auth_source)
+        if profile.auth_source == "azure_entra_id":
+            provider_to_login = profile.provider
+        _login_provider(provider_to_login)
         return
 
     flow = ApiKeyFlow(
@@ -1715,8 +1719,8 @@ def _login_provider(provider: str) -> None:
         _bind_external_provider(provider)
         return
     
-    if provider == "azure_openai":
-        _run_azure_entra_login()
+    if provider in {"azure_openai", "azure_anthropic"}:
+        _run_azure_entra_login(target_provider=provider)
         return
 
     if provider in ("anthropic", "openai", "dashscope", "bedrock", "vertex", "moonshot", "gemini", "minimax", "modelscope"):
@@ -1804,7 +1808,7 @@ def auth_login(
     """Interactively authenticate with a provider.
 
     Run without arguments to choose a provider from a menu.
-    Supported providers: anthropic, anthropic_claude, openai, openai_codex, copilot, dashscope, bedrock, vertex, moonshot, minimax, modelscope, azure_openai.
+    Supported providers: anthropic, anthropic_claude, openai, openai_codex, copilot, dashscope, bedrock, vertex, moonshot, minimax, modelscope, azure_openai, azure_anthropic.
     """
     if provider is None:
         print("Select a provider to authenticate:", flush=True)
@@ -1959,15 +1963,15 @@ def auth_copilot_logout() -> None:
     print("Copilot authentication cleared.")
 
 
-def _run_azure_entra_login() -> None:
-    """Configure the Azure OpenAI profile + verify Entra ID token acquisition.
+def _run_azure_entra_login(*, target_provider: str = "azure_openai") -> None:
+    """Configure an Azure Entra profile + verify token acquisition.
 
     Entra ID itself has no "login" we can perform from inside Python — the
     actual identity is provided by ``az login`` / managed identity / env
     vars / etc.  This helper instead:
 
-      1. Captures the Azure OpenAI endpoint, deployment, api-version and
-         optional tenant ID into the ``azure-openai`` provider profile.
+        1. Captures endpoint/model/settings into the target Azure profile
+            (``azure-openai`` or ``azure-anthropic``).
       2. Probes ``DefaultAzureCredential`` with the user's choices to give
          immediate "looks good / fix this" feedback.
     """
@@ -1975,7 +1979,8 @@ def _run_azure_entra_login() -> None:
     from openharness.auth.manager import AuthManager
     from openharness.config.settings import ProviderProfile
 
-    print("Configure Azure OpenAI with Microsoft Entra ID authentication.", flush=True)
+    target_label = "Azure OpenAI" if target_provider == "azure_openai" else "Azure AI Anthropic"
+    print(f"Configure {target_label} with Microsoft Entra ID authentication.", flush=True)
     print(
         "Tip: identity is sourced via DefaultAzureCredential — make sure "
         "`az login` succeeded, or set AZURE_CLIENT_ID / AZURE_TENANT_ID / "
@@ -1984,12 +1989,23 @@ def _run_azure_entra_login() -> None:
     )
     print(flush=True)
 
+    if target_provider not in {"azure_openai", "azure_anthropic"}:
+        print(f"Error: unsupported Azure Entra target provider: {target_provider}", file=sys.stderr, flush=True)
+        raise typer.Exit(1)
+
     manager = AuthManager()
     profiles = manager.list_profiles()
-    existing = profiles.get("azure-openai")
+    profile_name = "azure-openai" if target_provider == "azure_openai" else "azure-anthropic"
+    default_label = "Azure OpenAI (Entra ID)" if target_provider == "azure_openai" else "Azure AI Anthropic (Entra ID)"
+    existing = profiles.get(profile_name)
 
+    endpoint_prompt = (
+        "Azure OpenAI resource endpoint (e.g. https://my-aoai.openai.azure.com/)"
+        if target_provider == "azure_openai"
+        else "Azure AI endpoint for Anthropic protocol"
+    )
     endpoint = _text_prompt(
-        "Azure OpenAI resource endpoint (e.g. https://my-aoai.openai.azure.com/)",
+        endpoint_prompt,
         default=(existing.base_url if existing else "") or "",
     ).strip().rstrip("/")
     if not endpoint:
@@ -1997,19 +2013,33 @@ def _run_azure_entra_login() -> None:
         raise typer.Exit(1)
     if not endpoint.startswith(("http://", "https://")):
         endpoint = f"https://{endpoint}"
+    if target_provider == "azure_anthropic":
+        lowered = endpoint.lower()
+        if lowered.endswith("/v1/messages"):
+            endpoint = endpoint[: -len("/v1/messages")]
+        elif lowered.endswith("/messages"):
+            endpoint = endpoint[: -len("/messages")]
 
-    deployment = _text_prompt(
-        "Default deployment name (the name you chose in Azure portal, not the model id)",
-        default=(existing.default_model if existing else "gpt-4o"),
+    model_prompt = (
+        "Default deployment name (the name you chose in Azure portal, not the model id)"
+        if target_provider == "azure_openai"
+        else "Default Anthropic model ID (e.g. claude-opus-4-7)"
+    )
+    default_model = "gpt-4o" if target_provider == "azure_openai" else "claude-opus-4-7"
+    selected_model = _text_prompt(
+        model_prompt,
+        default=(existing.default_model if existing else default_model),
     ).strip()
-    if not deployment:
-        print("Error: deployment cannot be empty.", file=sys.stderr, flush=True)
+    if not selected_model:
+        print("Error: model/deployment cannot be empty.", file=sys.stderr, flush=True)
         raise typer.Exit(1)
 
-    api_version = _text_prompt(
-        "Azure OpenAI api-version",
-        default=(existing.api_version if existing and existing.api_version else "2024-10-21"),
-    ).strip()
+    api_version = ""
+    if target_provider == "azure_openai":
+        api_version = _text_prompt(
+            "Azure OpenAI api-version",
+            default=(existing.api_version if existing and existing.api_version else "2024-10-21"),
+        ).strip()
 
     tenant_id = _text_prompt(
         "Tenant ID (leave blank to auto-detect from `az login` / env)",
@@ -2032,29 +2062,57 @@ def _run_azure_entra_login() -> None:
     print("  ok — token acquired.", flush=True)
 
     new_profile = ProviderProfile(
-        label=existing.label if existing else "Azure OpenAI (Entra ID)",
-        provider="azure_openai",
-        api_format="azure_openai",
+        label=existing.label if existing else default_label,
+        provider=target_provider,
+        api_format="azure_openai" if target_provider == "azure_openai" else "anthropic",
         auth_source="azure_entra_id",
-        default_model=deployment,
-        last_model=deployment,
+        default_model=selected_model,
+        last_model=selected_model,
         base_url=endpoint,
-        api_version=api_version,
+        api_version=api_version or None,
         tenant_id=tenant_id,
         allowed_models=existing.allowed_models if existing else [],
         context_window_tokens=existing.context_window_tokens if existing else None,
         auto_compact_threshold_tokens=existing.auto_compact_threshold_tokens if existing else None,
     )
-    manager.upsert_profile("azure-openai", new_profile)
+    manager.upsert_profile(profile_name, new_profile)
     print(flush=True)
-    print("Azure OpenAI profile saved as 'azure-openai'.", flush=True)
-    print("Activate it with:  oh provider use azure-openai", flush=True)
+    print(f"Azure profile saved as '{profile_name}'.", flush=True)
+    print(f"Activate it with:  oh provider use {profile_name}", flush=True)
 
 
 @auth_app.command("azure-login")
-def auth_azure_login() -> None:
-    """Configure the Azure OpenAI profile and verify Entra ID auth."""
-    _run_azure_entra_login()
+def auth_azure_login(
+    provider: str | None = typer.Option(
+        None,
+        "--provider",
+        help="Target Azure provider: azure_openai or azure_anthropic",
+    ),
+) -> None:
+    """Configure an Azure Entra profile and verify Entra ID auth."""
+    if provider is None:
+        provider = _select_from_menu(
+            "Choose Azure provider to configure:",
+            [
+                ("azure_openai", "Azure OpenAI (OpenAI protocol)"),
+                ("azure_anthropic", "Azure AI Anthropic (Anthropic protocol)"),
+            ],
+            default_value="azure_openai",
+        )
+    provider = provider.strip().lower()
+    aliases = {
+        "azure-openai": "azure_openai",
+        "azure-anthropic": "azure_anthropic",
+    }
+    provider = aliases.get(provider, provider)
+    if provider not in {"azure_openai", "azure_anthropic"}:
+        print(
+            "Error: --provider must be one of: azure_openai, azure_anthropic",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise typer.Exit(1)
+    _run_azure_entra_login(target_provider=provider)
 
 
 @auth_app.command("azure-logout")

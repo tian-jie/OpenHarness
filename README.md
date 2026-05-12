@@ -448,6 +448,28 @@ oh auth azure-logout
 | **API** | OpenAI-compatible chat completions, tool/function calling, streaming |
 | **API version** | Defaults to `2024-10-21`; override via `oh auth azure-login` |
 
+### Azure AI Anthropic with Microsoft Entra ID
+
+You can also use Azure-hosted Anthropic protocol endpoints (for example, Claude Opus 4.7) with Entra ID:
+
+```bash
+# Install the optional Azure dependency
+pip install openharness-ai[azure]
+# or: pip install azure-identity
+
+# Configure Azure Anthropic profile
+oh auth azure-login --provider azure_anthropic
+
+# Activate the profile
+oh provider use azure-anthropic
+```
+
+Endpoint format note for `azure-anthropic`:
+
+- Recommended base URL: `https://<your-resource>.services.ai.azure.com/anthropic`
+- Do not manually append `/v1/messages`
+- If you paste a full endpoint ending with `/v1/messages`, OpenHarness trims it automatically
+
 
 ### GitHub Copilot Format (`--api-format copilot`)
 
@@ -868,6 +890,49 @@ Useful contributor entry points:
 OpenHarness handles both common terminal delete sequences, including the raw `DEL` byte (`0x7f`) that macOS Terminal.app sends for Backspace. If Backspace inserts spaces or visible control characters instead of deleting text, upgrade OpenHarness first.
 
 For older versions that do not include this fix, use a terminal that sends a standard Backspace sequence or adjust your terminal keyboard profile as a temporary workaround.
+
+### TLS certificate verify failed (corporate proxy / SSL inspection)
+
+If you see errors like `TLS certificate verification failed` or `self-signed certificate in certificate chain`, your network may be intercepting HTTPS with a corporate root CA.
+
+Recommended fix (secure): import/trust your corporate root CA in the Python/OpenSSL trust chain.
+
+Temporary workaround (insecure): set `OPENHARNESS_INSECURE_SKIP_TLS_VERIFY=1`.
+
+Current terminal session only:
+
+```powershell
+$env:OPENHARNESS_INSECURE_SKIP_TLS_VERIFY='1'
+openh
+```
+
+```bash
+export OPENHARNESS_INSECURE_SKIP_TLS_VERIFY=1
+oh
+```
+
+Persist for current user:
+
+```powershell
+setx OPENHARNESS_INSECURE_SKIP_TLS_VERIFY 1
+```
+
+```bash
+echo 'export OPENHARNESS_INSECURE_SKIP_TLS_VERIFY=1' >> ~/.bashrc
+source ~/.bashrc
+```
+
+VS Code integrated terminal only:
+
+```json
+{
+  "terminal.integrated.env.windows": {
+    "OPENHARNESS_INSECURE_SKIP_TLS_VERIFY": "1"
+  }
+}
+```
+
+Security warning: skipping TLS verification makes HTTPS vulnerable to interception. Use it only as a temporary fallback.
 
 ---
 

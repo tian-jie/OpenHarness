@@ -39,6 +39,7 @@ _KNOWN_PROVIDERS = [
     "minimax",
     "modelscope",
     "azure_openai",
+    "azure_anthropic",
 ]
 
 _AUTH_SOURCES = [
@@ -68,6 +69,7 @@ _PROFILE_BY_PROVIDER = {
     "minimax": "minimax",
     "modelscope": "modelscope",
     "azure_openai": "azure-openai",
+    "azure_anthropic": "azure-anthropic",
 }
 
 
@@ -292,6 +294,15 @@ class AuthManager:
                     source = "file"
 
             elif provider == "azure_openai":
+                try:
+                    import azure.identity  # noqa: F401, PLC0415
+
+                    configured = True
+                    source = "azure-identity"
+                except ImportError:
+                    pass
+
+            elif provider == "azure_anthropic":
                 try:
                     import azure.identity  # noqa: F401, PLC0415
 

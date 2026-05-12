@@ -90,6 +90,25 @@ class TestSettings:
         auth = s.resolve_auth()
         assert auth.value == "sk-fallback-key"
 
+    def test_resolve_auth_for_azure_anthropic_profile(self):
+        s = Settings(active_profile="azure-anthropic")
+        s = s.sync_active_profile_from_flat_fields()
+        s = s.model_copy(
+            update={
+                "profiles": {
+                    **s.profiles,
+                    "azure-anthropic": s.profiles["azure-anthropic"].model_copy(
+                        update={"base_url": "https://example.services.ai.azure.com"}
+                    ),
+                }
+            }
+        )
+
+        auth = s.resolve_auth()
+        assert auth.provider == "azure_anthropic"
+        assert auth.auth_kind == "azure_entra"
+        assert auth.value == "azure-entra-managed"
+
     def test_env_overrides_picks_up_openai_base_url(self, tmp_path: Path, monkeypatch):
         """_apply_env_overrides should pick up OPENAI_BASE_URL for relay
         providers that use OpenAI-compatible format."""
